@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     postgres_host: str = Field(default="localhost")
     postgres_port: int = Field(default=5432)
     postgres_user: str = Field(default="postgres")
-    postgres_password: str = Field(default="postgres")
+    postgres_password: str = Field(default="")
     postgres_db: str = Field(default="mtai_platform")
 
     # Rate Limits (requests per minute)
