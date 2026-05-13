@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # PostgreSQL - Stores tenant metadata, API keys, and billing data
+  postgres:
+    image: postgres:16-alpine
+    container_name: mtai-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-mtai_platform}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mtai-network
+
+  # Redis - Message queue for priority-based request scheduling
+  redis:
+    image: redis:7-alpine
+    container_name: mtai-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mtai-network
+
+  # Prometheus - Metrics collection and monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mtai-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - mtai-network
+    depends_on:
+      - postgres
+      - redis
+
+  # Grafana - Visualization dashboard for metrics
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mtai-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - mtai-network
+    depends_on:
+      - prometheus
+
+  # vLLM - LLM inference server (CPU-only for local dev)
+  # Note: For GPU support, uncomment the deploy section
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: mtai-vllm
+    command: >
+      --model ${VLLM_MODEL_NAME:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 2048
+      --dtype float16
+    ports:
+      - "8001:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - mtai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  vllm_cache:
+    driver: local
+
+networks:
+  mtai-network:
+    driver: bridge
